@@ -1,0 +1,6 @@
+JSON = JavaScript Object Notation
+It's a standard text format used to exchange structured data between systems.
+{
+    "model": "gpt-model",
+    "message": "What is RAG?"
+}
