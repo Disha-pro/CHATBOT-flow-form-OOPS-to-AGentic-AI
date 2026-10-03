@@ -39,7 +39,15 @@ These are HTTP methods.
 Usually means:
 Give me some data.
 requests.get(...)
-
+Python
+  │
+  │ GET
+  ▼
+API endpoint
+  │
+  ▼
+Response
+  
 #POST
 Usually means:
 I'm sending data to you for processing/creation.
@@ -53,6 +61,12 @@ I'm sending data to you for processing/creation.
         }
     ]
 }
+
+response = requests.post(
+    url, #Where are we sending the request?
+    headers=headers, #headers = headers
+    json=payload #send our python dict as json
+)
 
   5# Headers
   Headers contain information about the request
@@ -91,6 +105,11 @@ Server sends somethng back
 
 Now data may be a Python dictionary/list structure.
 Then you can access values from it.
+
+ ITs response is not just the LLM's text.
+It's an HTTP response object.
+We can inspect:
+print(response.status_code)
 
 8#Status codes
 Code	Meaning
@@ -158,3 +177,32 @@ payload = {
     "question": "What is RAG?",
     "temperature": 0
 }
+
+
+_______________________________________________________________________
+#Combine all
+.env
+ ↓
+API key
+ ↓
+os.getenv()
+ ↓
+headers
+
+User question
+ ↓
+payload dictionary
+ ↓
+requests.post()
+ ↓
+Groq API
+ ↓
+LLM
+ ↓
+HTTP response
+ ↓
+response.json()
+ ↓
+Python data
+ ↓
+extract generated answer
