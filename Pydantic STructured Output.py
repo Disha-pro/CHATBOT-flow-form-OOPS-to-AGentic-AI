@@ -1,3 +1,19 @@
+Pydantic is a Python library used to define the structure of data and validate that incoming data follows that structure.
+In simple terms:
+Pydantic = Data structure + validation
+
+Suppose your Agentic RAG router is only allowed to produce:
+kb
+web
+direct
+
+Without validation, you might receive:
+route = youtube
+
+
+Python itself doesn't care.
+
+
 from pydantic import BaseModel
 We need validation.
 That's where Pydantic becomes useful.
@@ -114,3 +130,119 @@ tube"  ❌
 
 #LLM + STRUCTURED OUTPUT
 
+User question
+      ↓
+     LLM
+      ↓
+structured decision
+      ↓
+RouteDecision
+      ↓
+KB / WEB / DIRECT
+
+
+def route_question(question):
+
+    messages = [
+        {
+            "role": "system",
+            "content": """
+            You are a routing agent.
+
+            Classify the user's question into exactly one route:
+
+            kb = questions requiring the private knowledge base
+            web = questions requiring current internet information
+            direct = greetings or questions answerable directly
+
+            Return only JSON:
+            {"route": "kb"}
+            """
+        },
+        {
+            "role": "user",
+            "content": question
+        }
+    ]
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=messages
+    )
+
+    return response.choices[0].message.content
+answer = route_question(
+    "What does my uploaded RAG document say?"
+)
+
+print(answer)
+print(type(answer))
+
+
+arse and validate it
+You've already learned:
+import json
+
+
+Convert:
+data = json.loads(answer)
+
+
+Now:
+data
+
+
+is approximately:
+{"route": "kb"}
+
+
+Then validate:
+decision = RouteDecision(**data)
+
+
+This ** is new.
+If:
+data = {"route": "kb"}
+
+
+then:
+RouteDecision(**data)
+
+
+is essentially equivalent to:
+RouteDecision(route="kb")
+
+
+** unpacks a dictionary into keyword arguments.
+So:
+decision.route
+
+
+gives:
+kb
+
+Question
+   ↓
+route_question(question)
+   ↓
+LLM
+   ↓
+'{"route":"kb"}'
+        ↑
+      string
+   ↓
+json.loads()
+   ↓
+{"route":"kb"}
+        ↑
+       dict
+   ↓
+RouteDecision(**data)
+   ↓
+RouteDecision(route="kb")
+        ↑
+validated Pydantic object
+   ↓
+decision.route
+   ↓
+"kb"
