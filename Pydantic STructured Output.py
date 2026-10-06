@@ -196,9 +196,25 @@ is approximately:
 {"route": "kb"}
 
 
-Then validate:
-decision = RouteDecision(**data)
+#Then validate:
+decision = RouteDecision(**data) #The ** unpacks a dictionary into keyword arguments.
+questions = [
+    "What does my uploaded RAG document say?",
+    "What is the latest AI news today?",
+    "Hello, how are you?"
+]
 
+for question in questions:
+
+    answer = route_question(question)
+
+    data = json.loads(answer)
+
+    decision = RouteDecision(**data)
+
+    print(question)
+    print("Route:", decision.route)
+    print()
 
 This ** is new.
 If:
@@ -246,3 +262,26 @@ validated Pydantic object
 decision.route
    ↓
 "kb"
+--------------------------------------------------------------------------------------
+One distinction to memorize
+Don't confuse these three things:
+
+'{"route":"kb"}'	JSON-formatted string
+{"route": "kb"}	Python dictionary
+RouteDecision(route="kb")	Validated Pydantic object
+
+
+LLM
+ ↓
+'{"route":"kb"}'
+STRING
+ ↓
+json.loads()
+ ↓
+{"route":"kb"}
+DICTIONARY
+ ↓
+RouteDecision(**data)
+ ↓
+RouteDecision(route="kb")
+PYDANTIC OBJECT
