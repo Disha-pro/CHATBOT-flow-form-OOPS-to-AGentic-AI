@@ -5,3 +5,5 @@ from langchain_community.document_loaders import TextLoader
 !pip install -q langchain-community
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 !pip install -q langchain-text-splitters
+!pip install -q langchain-huggingface sentence-transformers
+from langchain_huggingface import HuggingFaceEmbeddings
