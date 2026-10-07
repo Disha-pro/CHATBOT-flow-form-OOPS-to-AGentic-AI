@@ -7,3 +7,4 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 !pip install -q langchain-text-splitters
 !pip install -q langchain-huggingface sentence-transformers
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
