@@ -406,3 +406,142 @@ Chunk 2 → [.....................]
 Chunk 3 → [.....................]
 -----------------------------------------------------------------------------------------------------
 -------------------------------------------------------------------------------------------------------
+
+*************************************Cosine Similarity & Semantic Search***************************************
+
+      # We need to answer:
+Which stored vector is most similar to the user's query vector?
+
+That's where a similarity metric comes in.
+
+#what is cosine similarity?
+Cosine similarity is a mathematical measure of how similar two vectors are based on the angle between them.
+
+  #Mathematically:
+\[
+\text{cosine similarity}(A,B)
+=
+\frac{A \cdot B}
+{\|A\|\|B\|}
+\]
+
+For AI engineering, understand the purpose more than memorizing the formula.
+
+#Real RAG example
+Imagine our database contains three chunks.
+Chunk 1
+RAG retrieves external information before generating an answer.
+
+Chunk 2
+Python supports object-oriented programming.
+
+Chunk 3
+Agentic RAG can evaluate retrieved documents.
+
+We embed all three:
+Chunk 1 → Vector A
+Chunk 2 → Vector B
+Chunk 3 → Vector C
+
+#User asks:
+How does RAG retrieve information?
+
+#We embed the question:
+Question → Query Vector
+
+#Then compare:
+Query Vector ↔ Vector A = high similarity
+Query Vector ↔ Vector B = low similarity
+Query Vector ↔ Vector C = medium/high similarity
+
+So the system retrieves Chunk 1, perhaps followed by Chunk 3.
+Thats semantic retrieval.
+
+#Let's actually calculate it
+Use the embedding object you created in the previous lesson.
+text1 = RAG retrieves information from external documents.
+text2 = Retrieval augmented generation uses external knowledge.
+text3 = I like eating pizza.
+
+Create embeddings:
+v1 = embeddings.embed_query(text1)
+v2 = embeddings.embed_query(text2)
+v3 = embeddings.embed_query(text3)
+
+#Now we will use:
+ from sklearn.metrics.pairwise import cosine_similarity 
+#Your vector looks like:
+[0.1, 0.2, 0.3, ...]
+
+But cosine_similarity() expects a collection of samples, so use:
+[v1]
+
+#Then:
+similarity_1 = cosine_similarity([v1], [v2])[0][0]
+similarity_2 = cosine_similarity([v1], [v3])[0][0]
+
+#Print:
+print("RAG vs RAG:", similarity_1)print("RAG vs Pizza:", similarity_2)
+
+#You should generally see:
+RAG vs RAG    → higher similarity
+RAG vs Pizza  → lower similarity
+
+Don't expect specific numbers—the model determines the embeddings.
+
+
+#What does the score mean?
+ For cosine similarity, values mathematically range ***********IMP******from -1 to 1, though the distribution you see in embedding systems depends on the embedding model and normalization.                      
+Higher score
+    ↓
+more similar according to embedding space
+
+Lower score
+    ↓
+less similar   
+
+Do not make a universal rule such as:
+0.80 = relevant
+0.50 = irrelevant
+
+without evaluating your own embedding model and dataset.
+That's important when we later build your retrieval-confidence logic.
+
+------------------------------------------------------------------------------------------------------------
+*****************************************SEMANTIC SEARCH*******************************************
+
+Semantic search retrieves information based on meaning represented by embeddings, rather than relying only on exact keyword matches.
+
+            #Example:
+User:
+How can I recover my account password?
+
+Document:
+Steps for resetting forgotten login credentials.
+
+The wording is different:
+recover ≠ reset
+account password ≠ login credentials
+
+but the meanings are related.
+Embedding-based semantic search can capture that relationship.
+
+DOCUMENT
+   ↓
+Loader
+   ↓
+Document objects
+   ↓
+Chunking
+   ↓
+Chunks
+   ↓
+Embedding model
+   ↓
+Vectors
+   ↓
+Vector database
+   ↓
+Similarity search
+   ↓
+Relevant chunks
