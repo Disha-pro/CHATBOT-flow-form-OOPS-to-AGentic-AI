@@ -1,0 +1,9 @@
+1.Your RAG application contains 10 million vectors, and retrieval is becoming slow. What would you investigate?"
+= 
+Determine whether the system uses exhaustive or approximate search.
+Measure p50/p95 retrieval latency, throughput and resource utilization.
+Examine the index type and its tuning parameters.
+Evaluate ANN recall against an exact-search baseline.
+Inspect metadata-filter selectivity and top-k settings.
+Consider memory constraints, quantization, sharding and hardware.
+Check whether the real bottleneck is vector search, network calls, reranking or embedding generation.
