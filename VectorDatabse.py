@@ -284,4 +284,80 @@ Chroma: open-source option plus Chroma Cloud; current Starter has a $0 monthly b
 
 ------------------------------------------------------------------------------------------------------
 
-*******************Vector Database Indexing: Exact Search vs ANN*********************************
+*******************Vector Database *********************************
+
+1#Five operations
+ Operation	Purpose
+add_documents()	                      Insert documents and their embeddings
+similarity_search()	                  Retrieve nearest matching documents
+similarity_search_with_score()        	Retrieve matches with scores
+as_retriever()                        	Convert vector store into a retriever interface
+delete()	                              Remove stored records by ID
+
+2#Hands-on: Search with relevance scores
+from langchain_core.vectorstores import InMemoryVectorStore
+
+vector_store = InMemoryVectorStore(
+    embedding=embeddings
+)
+
+vector_store.add_documents(chunks)
+
+results = vector_store.similarity_search_with_score(
+    "What is Retrieval-Augmented Generation?",
+    k=2
+)
+
+for doc, score in results:
+    print("Content:", doc.page_content)
+    print("Score:", score)
+    print("Source:", doc.metadata.get("source"))
+    print("---")
+
+#flow:
+Chunks
+   ↓
+add_documents()
+   ↓
+Embeddings generated and stored
+   ↓
+User question
+   ↓
+Question embedded
+   ↓
+Similarity search
+   ↓
+Top 2 matching chunks + scores #Important: Score interpretation depends on the vector store and metric. Never assume all databases return the same score range or direction.
+
+3#Convert the vector store into a retriever
+retriever = vector_store.as_retriever(
+    search_type="similarity",
+    search_kwargs={"k": 2}
+)
+
+#Now retrieve documents:
+question = "Explain RAG."
+
+retrieved_docs = retriever.invoke(question)
+
+for doc in retrieved_docs:
+    print(doc.page_content)
+    print(doc.metadata)
+
+#Why is as_retriever() important?
+A vector store is responsible for storing and searching vectors.
+A retriever provides a standardized interface for retrieving relevant documents.
+
+User question
+      ↓
+Retriever
+      ↓
+Vector store search
+      ↓
+Relevant Documents
+      ↓
+Prompt Template
+      ↓
+LLM
+      ↓
+Generated answer
