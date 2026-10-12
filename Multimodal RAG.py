@@ -14,15 +14,18 @@ OCR tools	                          Extract text from scanned pages/images	     
 
 !pip install -q langchain-community pymupdf
 
-Upload a sample PDF:
-from google.colab import filesuploaded = files.upload()
+#Upload a sample PDF:
+from google.colab import files
+uploaded = files.upload()
 
-Then load it:
+#Then load it:
 from langchain_community.document_loaders import PyMuPDFLoader
 pdf_path = next(iter(uploaded))
 loader = PyMuPDFLoader(pdf_path)
-documents = loader.load() #What does .load() return?
-Usually, in its default page-oriented
+documents = loader.load() 
+
+#What does .load() return?
+#Usually, in its default page-oriented
 print("Total page documents:", len(documents))
 
 #Inspect the first page:
@@ -33,4 +36,245 @@ print(first_page.page_content[:500])
 
 print("\nMETADATA:")
 print(first_page.metadata)
+
+#PyMuPDF vs PyMuPDFLoader — an important difference
+PyMuPDFLoader is a LangChain integration that converts PDF content into LangChain Document objects.
+PyMuPDF is the underlying PDF-processing library that gives you more direct control.
+
+#Example:
+
+import pymupdf
+
+pdf = pymupdf.open(pdf_path) #opens the PDF.
+
+print("Total pages:", len(pdf))  
+
+page = pdf[0] #accesses the first page.
+
+text = page.get_text() #extracts text from that page.
+
+print(text[:500])
+
+pdf.close() #releases the document.
+
+***************************OCR (Optical Character Recognition) converts visible characters in an image or scan into machine-readable text.
+
+print("Pages:", len(documents))
+
+for i, doc in enumerate(documents):
+    print(f"\nPAGE {i + 1}")
+    print("Characters:", len(doc.page_content))
+    print("Source:", doc.metadata.get("source"))
+    print("PDF page index:", doc.metadata.get("page"))
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+**********************************UnstructuredPDFLoader, Layout Detection & OCR***********************************
+
+Our goal today: Understand how to preserve document structure before converting content into embeddings.
+
+
+PyMuPDFLoader                            vs                                              UnstructuredPDFLoader
+Feature                              	PyMuPDFLoader	                                     UnstructuredPDFLoader
+Primary strength                    	Fast, page-oriented PDF extraction                	Layout-aware document partitioning
+Text extraction                      	Yes	                                                Yes
+Headings and element types	          Limited by default                                 	Can identify titles and other elements
+Tables	                              Requires additional handling	                      Supports table extraction with appropriate strategy/settings
+Scanned PDFs	                        Requires OCR configuration or separate OCR	        Can use OCR-based processing
+Images	                              Extraction support depends on configuration        	Can extract image elements with appropriate settings
+Dependencies	                        Relatively  lightweight                            	Heavier
+Best fit                             	Straightforward digital PDFs                      	Complex document layouts
+
+#Neither loader is universally superior.
+#. What is Unstructured?
+Unstructured is a document-processing ecosystem that partitions files into meaningful elements.
+Instead of treating an entire PDF page as one large text block, it can identify elements such as:
+PDF
+ ├── Title
+ ├── NarrativeText
+ ├── Table
+ ├── ListItem
+ └── Image
+
+
+!pip install -q "unstructured[pdf]" langchain-community
+#The Unstructured PDF stack may require system dependencies such as Poppler and Tesseract, depending on the strategy and runtime.
+!apt-get update -qq
+!apt-get install -y -qq poppler-utils tesseract-ocr
+
+from google.colab import files
+uploaded=files.upload()
+#load the pdf
+pdf_path = next(iter(uploaded))
+
+#Now:
+from langchain_community.document_loaders import UnstructuredPDFLoader
+
+loader = UnstructuredPDFLoader(
+    pdf_path,
+    mode="elements", #requests separate LangChain Document objects for detected elements, rather than combining the document into one text object.
+    strategy="fast" #prioritizes faster processing of PDFs with extractable text. It is not the appropriate choice when you need full layout-aware table/image extraction.
+) #For complex layouts, we'll examine strategy="hi_res".
+
+documents = loader.load()
+
+print("Total elements:", len(documents))
+
+#RUN
+for i, doc in enumerate(documents[:10]):
+    print(f"\nELEMENT {i + 1}")
+    print("Type:", doc.metadata.get("category"))
+    print("Page:", doc.metadata.get("page_number"))
+    print("Content:", doc.page_content[:200])
+
+#The actual categories depend on the PDF, extraction strategy and installed Unstructured version.
+Notice an important difference:
+PyMuPDFLoader commonly uses a zero-based page index, while Unstructured element metadata commonly uses a one-based page_number.
+Always normalize page references before generating user-facing citations.
+
+#What changes with high-resolution extraction?
+For complex PDF documents, Unstructured provides a hi_res strategy that uses document-layout analysis.
+
+loader = UnstructuredPDFLoader(
+    pdf_path,
+    mode="elements",
+    strategy="hi_res",
+    infer_table_structure=True
+)
+
+elements = loader.load()
+
+#This may be substantially slower and can require downloading layout-analysis models.
+With suitable configuration, detected tables can include an HTML representation in metadata, which is useful for preserving rows and columns.
+
+#for example:
+tables = [
+    doc for doc in elements
+    if doc.metadata.get("category") == "Table"
+]
+
+print("Tables detected:", len(tables))
+
+for table in tables[:2]:
+    print("TEXT:", table.page_content[:500])
+    print("HTML:", table.metadata.get("text_as_html"))
+
+#A structured table representation can preserve relationships that plain text may flatten.
+However, table detection is not guaranteed, and HTML metadata availability depends on the extraction configuration.
+
+*****************************OCR*********************************************
+OCR stands for Optical Character Recognition.
+It converts visible characters in scanned pages or images into machine-readable text.
+
+ loader = UnstructuredPDFLoader(
+    pdf_path,
+    mode="elements",
+    strategy="ocr_only"
+)
+
+ocr_documents = loader.load() 
+
+Use this when OCR-based text extraction is appropriate. OCR does not necessarily preserve complex layout, table structure or mathematical notation accurately.
+
+
+  Incoming PDF
+     ↓
+Inspect text and layout
+     ↓
+Digital text available?
+     ├── Yes → PyMuPDF / fast extraction
+     │
+     └── No → OCR
+                  ↓
+          Complex tables/images?
+                  ↓
+          Layout / vision processing
+                  ↓
+          Normalize content + metadata
+                  ↓
+          Embeddings + Vector Database
+
+#how to connect to your multimodel rag
+{
+    "source": "attention_paper.pdf",
+    "page": 3,
+    "content_type": "table",
+    "section": "Model Architecture"
+}
+
+#For visual content, we'll also learn how to generate a vision-model description and associate it with the original image.
+That will allow queries such as:
+"Explain the Transformer architecture shown in the diagram."
+
+A text-only retriever might miss visual information. A multimodal pipeline can retrieve a representation of the figure and use the original visual evidence during answer generation
+
+#EXAMPLE
+from collections import Counter
+
+categories = Counter(
+    doc.metadata.get("category", "Unknown")
+    for doc in documents
+)
+
+for category, count in categories.items():
+    print(category, ":", count)
+
+loader = UnstructuredPDFLoader(
+    pdf_path,
+    mode="elements",
+    strategy="fast"
+)
+fast_stra = loader.load()
+#inspect
+for i, doc in enumerate(documents[:10]):
+    print(f"\nELEMENT {i + 1}")
+    print("Type:", doc.metadata.get("category"))
+    print("Page:", doc.metadata.get("page_number"))
+    print("Content:", doc.page_content[:200])
+
+---------------------------------------------------------------------------------------------------------------
+-------------------------------------------------------------------------------------------------------------------
+*****************************************TABLE & IMAGE EXTRACTION*********************************************
+
+  #load
+  from google.colab import files
+
+uploaded = files.upload()
+pdf_path = next(iter(uploaded))
+
+import pymupdf
+
+pdf = pymupdf.open(pdf_path)#opens the pdf
+page = pdf[0] # selects the first page
+
+print(page.get_text()[:1000]) extracts machine relatable text.
+
+#Extract the table
+tables = page.find_tables() #detects table structures and extract() returns rows and cells. You should look for the Personal Loan, Vehicle Loan and Home Loan rows.
+
+print("Tables found:", len(tables.tables))
+
+for table in tables.tables:
+    for row in table.extract():
+        print(row)
+
+
+#Extract Visual content
+A critical distinction: embedded images and vector-drawn diagrams are different PDF objects. The workflow diagram in this practice PDF is vector-drawn, so it may not appear in page.get_images().
+For a robust approach, render the whole page:
+
+pix = page.get_pixmap(dpi=150)
+
+pix.save("page_1.png")
+
+his converts the page into an image, including the diagram, tables and text.
+You can then provide the rendered image to a vision-capable model to describe the workflow. That is a foundation of multimodal document understanding.
+
+
+
+
+
+
+
+
 
