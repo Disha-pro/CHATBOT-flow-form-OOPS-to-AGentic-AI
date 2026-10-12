@@ -465,3 +465,248 @@ for question in questions:
 --------------------------------------------------------------------------------------------------------------------------------
 ***********************************OCR FALLBACK AND COMPLETE MULTIMODEL RAG*******************************************************
 
+1#why OCR fallback matters
+Suppose a bank uploads 100 loan documents. Some are digital PDFs, some are scanned forms, and others contain a mixture of both.
+                  PDF Page
+                     ↓
+            Extract digital text
+                     ↓
+             Enough usable text?
+                /          \
+              Yes           No
+               ↓             ↓
+          Keep text       Render page
+                             ↓
+                            OCR
+                             ↓
+                   Extracted page text
+                \           /
+                 ↓         ↓
+                  Normalize
+                     ↓
+             Document + Metadata
+                     ↓
+              RAG Retrieval
+
+We will use PyMuPDF + Tesseract OCR.
+
+2#install OCR dependencies
+!apt-get install -y -qq tesseract-ocr
+!pip install -q pytesseract pillow pymupdf
+
+3#build an OCR fallback funtion
+
+import pymupdf
+import pytesseract
+
+from PIL import Image
+from io import BytesIO
+
+def extract_page_text(page):
+
+    # First attempt: extract digital text
+    text = page.get_text().strip()
+
+    # Heuristic: sufficiently long text
+    if len(text) >= 50:
+        return text, "digital"
+
+    # Fallback: render the page
+    pix = page.get_pixmap(dpi=200)
+
+    # Convert Pixmap to PIL Image
+    image = Image.open(
+        BytesIO(pix.tobytes("png"))
+    )
+
+    # Apply OCR
+    ocr_text = pytesseract.image_to_string(
+        image,
+        lang="eng"
+    )
+
+    return ocr_text.strip(), "ocr"
+
+
+Code                                                    	Meaning
+page.get_text()	                                         Extracts machine-readable PDF text
+.strip()	                                                Removes leading/trailing whitespace
+len(text) >= 50                                          	A simple heuristic for deciding whether to skip OCR
+page.get_pixmap(dpi=200)	                                Renders the PDF page at 200 DPI
+pix.tobytes("png")	                                      Converts the rendered image to PNG bytes
+BytesIO(...)	                                            Treats those bytes like an in-memory file
+Image.open(...)                                          	Opens the image using Pillow
+pytesseract.image_to_string()                            	Recognizes text from the image
+return text, digital	                                  Returns extracted text and the extraction method
+
+
+Production warning: The 50-character threshold is only a learning heuristic. A page may contain 200 extractable characters and still have an important scanned table or figure. Production systems need page-layout inspection and content-quality checks.
+
+
+  4#Process the whole pdf with OCR fallback
+from langchain_core.documents import Document
+
+pdf = pymupdf.open(pdf_path)
+
+ocr_documents = []
+
+for page_index, page in enumerate(pdf): #enumerate() gives you both the index and the item.
+
+    text, method = extract_page_text(page)
+
+    if not text:
+        continue
+
+    doc = Document(
+        page_content=text,
+        metadata={
+            "source": pdf_path,
+            "page": page_index + 1,
+            "content_type": "text",
+            "extraction_method": method
+        }
+    )
+
+    ocr_documents.append(doc)
+
+pdf.close()
+
+print("Extracted pages:", len(ocr_documents))
+
+#for index, value in enumerate(["A", "B", "C"]): #for enumerte
+    print(index, value)
+
+5#Combine OCR,table and visual document
+table_documents — structured banking loan records.
+image_document — a vision-generated description of the diagram.
+
+all_documents = (
+    ocr_documents
+    + table_documents
+    + [image_document]
+)
+
+print("Total documents:", len(all_documents))
+
+Production note: This approach may duplicate information because the page text also contains table labels and values. Later, we can remove duplicated table regions, preserve bounding boxes and apply content-aware chunking.
+
+6#Chunk and index the documents
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=80
+)
+
+chunks = splitter.split_documents(all_documents)
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+vector_store = InMemoryVectorStore(
+    embedding=embeddings
+)
+
+vector_store.add_documents(chunks)
+
+retriever = vector_store.as_retriever(
+    search_kwargs={"k": 4}
+)
+
+#Why 500 and 80?
+- chunk_size=500: targets chunks of approximately 500 characters.
+- chunk_overlap=80: preserves up to approximately 80 characters of context between adjacent chunks.
+These are starting values, not production-optimized settings.
+Also note that RecursiveCharacterTextSplitter uses character counts by default, not token counts.
+
+
+7#Connect the multimodel retriver to Groq
+  from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate
+
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    temperature=0
+)
+
+prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """
+        You are a document question-answering assistant.
+
+        Answer using only the supplied context.
+        If the answer is not supported, say you don't know.
+
+        Preserve numerical values accurately.
+        Do not invent information.
+
+        Context:
+        {context}
+        """
+    ),
+    ("human", "{question}")
+])
+
+#Build the final multimodel RAG funtion
+def ask_multimodal_rag(question):
+
+    # Retrieve relevant chunks
+    docs = retriever.invoke(question)
+
+    # Prepare context with source references
+    context = "\n\n".join(
+        f"Source: {doc.metadata.get('source')}\n"
+        f"Page: {doc.metadata.get('page')}\n"
+        f"Type: {doc.metadata.get('content_type')}\n"
+        f"Content: {doc.page_content}"
+        for doc in docs
+    )
+
+    # Generate answer
+    chain = prompt | llm
+
+    response = chain.invoke({
+        "context": context,
+        "question": question
+    })
+
+    return {
+        "answer": response.content,
+        "sources": [
+            doc.metadata for doc in docs
+        ],
+        "retrieved_count": len(docs)
+    }
+
+#Test the complete pipeline
+questions = [
+    "What is the minimum credit score for a vehicle loan?",
+    "Which loan product has the longest tenure?",
+    "Explain the five stages shown in the workflow diagram."
+]
+
+for question in questions:
+
+    result = ask_multimodal_rag(question)
+
+    print("\nQUESTION:", question)
+    print("ANSWER:", result["answer"])
+    print("RETRIEVED:", result["retrieved_count"])
+    print("SOURCES:", result["sources"])
+
+
+
+
+******************************************************Multimodal RAG milestone
+Ready for testing
+
+- Digital PDF text extraction and OCR fallback
+- Table-to-text serialization
+- Vision-generated image descriptions
+- Content-type and page metadata
+- Embedding, retrieval and Groq answer generation
+This is a learning implementation, not yet a production-hardened system. We still need evaluation, error handling, deduplication and verified citations.
