@@ -267,11 +267,31 @@ pix = page.get_pixmap(dpi=150)
 
 pix.save("page_1.png")
 
-his converts the page into an image, including the diagram, tables and text.
+This converts the page into an image, including the diagram, tables and text.
 You can then provide the rendered image to a vision-capable model to describe the workflow. That is a foundation of multimodal document understanding.
 
+#Line 1: pix = page.get_pixmap(dpi=150)
+- page is the first PDF page, selected earlier using pdf[0].
+- get_pixmap() renders the PDF page into a raster image (pixels).
+- dpi means dots per inch, which controls the rendering resolution.
+- 150 means 150 pixels per inch at the PDF page's physical scale.
+- pix is a variable holding the resulting PyMuPDF Pixmap object.
 
+Higher DPI generally improves the visibility of small text, but increases memory, image size and processing cost. It does not automatically guarantee better OCR accuracy.
 
+#Line 2: pix.save("page_1.png")
+- pix.save() writes the rendered image to a file.
+- "page_1.png" is the output filename.
+- The file is saved in your Colab working directory.
+  
+#To display img
+  from IPython.display import Image, display
+
+display(Image(filename="page_1.png"))
+
+------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------------------------------------
+***********************************Convert Tables and Images into RAG Knowledge***********************************************
 
 
 
