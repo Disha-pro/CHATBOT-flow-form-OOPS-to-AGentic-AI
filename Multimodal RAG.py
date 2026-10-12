@@ -293,8 +293,175 @@ display(Image(filename="page_1.png"))
 ------------------------------------------------------------------------------------------------------------------------------
 ***********************************Convert Tables and Images into RAG Knowledge***********************************************
 
+PDF
+ ├── Text extraction
+ ├── Table extraction
+ └── Image rendering
+          ↓
+   Vision model description
+          ↓
+   Normalize into Documents
+          ↓
+   Hugging Face Embeddings
+          ↓
+       Vector Store
+          ↓
+   Retriever → Groq LLM
+
+1#Convert your extracted tbale into readable text
+table = tables.tables[0] #selects the first detected table
+
+rows = table.extract()#returns its content as a list of rows
+
+headers = rows[0] #selects the header row.
+
+data_rows = rows[1:]
+
+#rows[1:] selects every row after the header.
+Now convert the table into searchable sentences:
+
+table_texts = []
+
+for row in data_rows:
+    record = dict(zip(headers, row))#pairs each column name with its corresponding cell.
+#dict converts those pairs into a dictionary.
+    text = (
+        f"Product: {record['Product']}. "
+        f"Minimum income: {record['Minimum income']}. "
+        f"Minimum score: {record['Minimum score']}. "
+        f"Maximum tenure: {record['Maximum tenure']}."
+    )
+
+    table_texts.append(text)
+#adds each product's structured description to a list.
+for text in table_texts:
+    print(text)
+
+#convert table records into Langchian document
+from langchain_core.documents import Document
+
+table_documents = []
+
+for text in table_texts:
+    doc = Document(
+        page_content=text,
+        metadata={
+            "source": pdf_path,
+            "page": 1,
+            "content_type": "table"
+        }
+    )
+
+    table_documents.append(doc)
+  #Here, page_content stores the text that will be embedded, while metadata stores information about its origin.
+
+3#Generate a description of the diageam using a vison model
+import os
+import base64#Some vision APIs accept images as Base64 data URLs rather than local file paths.
+from groq import Groq
+
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
+with open("page_1.png", "rb") as image_file:
+    image_bytes = image_file.read()
+
+image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+
+What does this mean?
+- rb opens the image in read-binary mode.
+- .read() loads the image bytes.
+- base64.b64encode() converts binary data into Base64-encoded bytes.
+- .decode("utf-8") converts those encoded bytes into a Python string.
+
+#Now call a vision capable model
+  vision_response = client.chat.completions.create(
+    model="meta-llama/llama-4-scout-17b-16e-instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Describe the workflow diagram in this image. "
+                        "Identify the stages and their sequence. "
+                        "Do not invent missing details."
+                    )
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (
+                            "data:image/png;base64,"
+                            + image_base64
+                        )
+                    }
+                }
+            ]
+        }
+    ],
+    temperature=0
+)
+
+image_description = vision_response.choices[0].message.content
+
+print(image_description)
+
+4#store the visual description as Document
+image_document = Document(
+    page_content=image_description,
+    metadata={
+        "source": pdf_path,
+        "page": 1,
+        "content_type": "image_description",
+        "image_path": "page_1.png"
+    }
+)
+
+This creates a searchable textual representation of visual content.
+It is a vision-to-text multimodal RAG approach: the image is interpreted by a vision model, and the resulting description is embedded as text. This differs from a system that stores native image embeddings and performs cross-modal image retrieval.
 
 
+  #Combine and index the knowledge
+  all_documents = table_documents + [image_document]
 
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.vectorstores import InMemoryVectorStore
 
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+vector_store = InMemoryVectorStore(
+    embedding=embeddings
+)
+
+vector_store.add_documents(all_documents)
+
+retriever = vector_store.as_retriever(
+    search_kwargs={"k": 3}
+)
+
+#Test multimodel retrival
+questions = [
+    "What is the minimum credit score for a vehicle loan?",
+    "Which loan product has the longest maximum tenure?",
+    "Explain the five-stage workflow shown in the diagram."
+]
+
+for question in questions:
+    print("\nQUESTION:", question)
+
+    docs = retriever.invoke(question)
+
+    for doc in docs:
+        print("Type:", doc.metadata["content_type"])
+        print("Content:", doc.page_content[:300])
+        print("---")
+
+--------------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------------
+***********************************OCR FALLBACK AND COMPLETE MULTIMODEL RAG*******************************************************
 
