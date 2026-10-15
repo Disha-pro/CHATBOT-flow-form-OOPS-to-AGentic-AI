@@ -382,3 +382,123 @@ START
   |
   v
 PORTFOLIO-READY APPLICATION
+
+
+
+                      USER
+                        |
+                        v
+                APPLICATION / API
+                        |
+                        v
+                 LANGGRAPH ENGINE
+                        |
+                 QUESTION ROUTER
+                        |
+          +-------------+-------------+
+          |                           |
+          v                           v
+    KNOWLEDGE RETRIEVAL         DIRECT RESPONSE
+          |
+          v
+    RETRIEVAL STRATEGY
+          |
+    +-----+---------------------+
+    |                           |
+    v                           v
+ VECTOR SEARCH              GRAPH SEARCH
+    |                           |
+    v                           v
+ PINECONE                    NEO4J
+    |                           |
+    v                           v
+ SIMILAR CHUNKS              GRAPH PATHS
+    |                           |
+    +-------------+-------------+
+                  |
+                  v
+            EVIDENCE GRADER
+                  |
+           +------+------+
+           |             |
+          GOOD          WEAK
+           |             |
+           |             v
+           |        QUERY REWRITE
+           |             |
+           |        RETRY RETRIEVAL
+           |             |
+           +------+------+
+                  |
+                  v
+             CONTEXT BUILDER
+                  |
+                  v
+            PROMPT TEMPLATE
+                  |
+                  v
+               GROQ LLM
+                  |
+                  v
+           GENERATED ANSWER
+                  |
+                  v
+           GROUNDING CHECK
+                  |
+          +-------+-------+
+          |               |
+        PASS             FAIL
+          |               |
+          v               v
+      FINAL ANSWER    REVISE / FALLBACK
+          |
+          v
+        RESPONSE
+
+CROSS-CUTTING COMPONENTS
+------------------------
+- Checkpointing: Save graph state
+- Logging: Record events and errors
+- Tracing: Track execution across nodes
+- Evaluation: Measure retrieval and answer quality
+- Security: Protect data and tool access
+- Monitoring: Observe latency, errors and costs
+
+
+DOCUMENT INGESTION PIPELINE
+---------------------------
+PDF / TXT / IMAGE / TABLE
+           |
+           v
+      DOCUMENT LOADER
+           |
+           v
+    EXTRACTION / OCR
+           |
+           v
+       CLEANING
+           |
+           v
+       CHUNKING
+           |
+           v
+       EMBEDDINGS
+           |
+           v
+      VECTOR DATABASE
+
+OPTIONAL GRAPH INGESTION
+------------------------
+DOCUMENTS
+    |
+    v
+ENTITY EXTRACTION
+    |
+    v
+RELATIONSHIP EXTRACTION
+    |
+    v
+ENTITY RESOLUTION / VALIDATION
+    |
+    v
+GRAPH DATABASE
