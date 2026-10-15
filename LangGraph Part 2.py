@@ -290,3 +290,79 @@ The graph is now capable of selecting and executing tools
 PART E - EXECUTE YOUR FIRST TOOL-CALLING AGENT
 
 11.Ask a banking question
+from langchain_core.messages import HumanMessage
+
+result = agent_app.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "What is the minimum credit score "
+                    "for a vehicle loan?"
+                )
+            )
+        ]
+    },
+    config={"recursion_limit": 10}
+)
+
+print(result["messages"][-1].content)
+
+The expected factual answer, if the model uses the tool correctly, is:
+The minimum credit score for a vehicle loan is 680.
+
+#Now try:
+result = agent_app.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content=(
+                    "What is the minimum credit score "
+                    "and maximum tenure for a home loan?"
+                )
+            )
+        ]
+    },
+    config={"recursion_limit": 10}
+)
+
+print(result["messages"][-1].content)
+
+The agent should be able to use both tools to retrieve the two policy facts.
+The model decides which tools to call, and the graph handles their execution
+
+PART F: INSPECT THE ACTUA; TOOL CALLS
+for message in result["messages"]:
+
+    print("\nMessage type:", message.type)
+
+    if hasattr(message, "tool_calls"):
+        print("Tool calls:", message.tool_calls)
+
+    print("Content:", message.content)
+
+    HumanMessage
+     |
+     v
+AIMessage (tool-call request)
+     |
+     v
+ToolMessage (tool result)
+     |
+     v
+AIMessage (final answer)
+
+
+2. What can go wrong?
+Failure	                                            Cause	                                   Engineering response
+Model doesn't call a tool	                    Tool choice is model-controlled	               Improve descriptions or enforce tool usage where supported
+Wrong tool selected                         	Ambiguous tool descriptions	                    Clarify tool responsibilities
+Invalid arguments                            	Model generates incompatible inputs            	Validate schemas and handle errors
+Repeated tool calls                         	Agent loops unnecessarily	                      Limit steps and detect repetition
+Tool returns wrong data	                      Incorrect tool implementation	                   Unit-test tools independently
+Sensitive data exposure	                      Tool has excessive permissions                  	Apply authorization and least privilege
+
+Security principle: A model choosing a tool does not grant permission to access data. Authorization must be enforced by the tool or backend.
+
+For production, you should also enforce limits on tool calls, timeouts and API usage. The graph recursion limit is a useful safeguard, but it is not a complete resource-control strategy.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
