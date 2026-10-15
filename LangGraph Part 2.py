@@ -115,3 +115,28 @@ def get_loan_tenure(loan_type: str) -> str:
 PART C- CONNECTS TOOLS
 
 5.Configure the LLM
+import os
+from getpass import getpass
+from langchain_groq import ChatGroq
+
+if not os.getenv(GROQ_API_KEY):
+    os.environ[GROQ_API_KEY] = getpass(Enter Groq API key: )
+
+llm = ChatGroq(
+    model=openai/gpt-oss-20b,
+    temperature=0
+)
+Tool-calling support depends on the model and provider. This lesson uses the LangChain tool-calling interface; if the selected Groq model rejects a tool schema, we will need to inspect the provider error or use another supported model.
+
+6.Bind tools to the LLM
+tools = [
+    get_loan_credit_score,
+    get_loan_tenure
+]
+
+llm_with_tools = llm.bind_tools(tools)
+
+What does bind_tools() do?
+It makes the tool definitions available to the model during inference.
+It does not automatically execute them.
+
