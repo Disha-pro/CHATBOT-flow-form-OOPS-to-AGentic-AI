@@ -366,3 +366,457 @@ Security principle: A model choosing a tool does not grant permission to access 
 
 For production, you should also enforce limits on tool calls, timeouts and API usage. The graph recursion limit is a useful safeguard, but it is not a complete resource-control strategy.
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+***********************************LangGraph Memory, Checkpointing & Human-in-the-Loop***********************************************************************************************************************
+Today we're completing the core LangGraph module. You'll learn how to make your AI application remember conversations, resume execution, inspect previous states and pause for human approval.
+
+1.Why does an AI agent need memory?
+#Consider a banking assistant.
+
+Conversation 1:
+User: "What is the minimum credit score for a home loan?"
+Assistant: "720."
+
+Conversation 2:
+User: "What about the maximum tenure?"
+Without conversation memory, the assistant may not know that "the maximum tenure" refers to the home loan.
+With memory, it can use previous messages to understand the follow-up.
+
+#Architecture
+                     USER MESSAGE
+                           |
+                           v
+                     LANGGRAPH APP
+                           |
+                           v
+                      THREAD ID
+                           |
+                           v
+                    CHECKPOINTER
+                           |
+                  +--------+--------+
+                  |                 |
+                  v                 v
+             Existing State      New Thread
+                  |                 |
+                  v                 v
+             Load History       Empty History
+                  |                 |
+                  +--------+--------+
+                           |
+                           v
+                       LLM NODE
+                           |
+                           v
+                    GENERATE RESPONSE
+                           |
+                           v
+                    SAVE CHECKPOINT
+                           |
+                           v
+                       RESPONSE
+A checkpoint stores graph state at execution boundaries. It can include conversation messages and other state fields, not just a transcript.
+
+PART A- SHORT TERM MEMORY WITH A CHECKPOINTER
+2.INSTALL:
+!pip install -q -U langgraph langchain-groq
+
+3.CReate the Groq Model
+import os
+from getpass import getpass
+from langchain_groq import ChatGroq
+
+if not os.getenv("GROQ_API_KEY"):
+    os.environ["GROQ_API_KEY"] = getpass("Groq API key: ")
+
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    temperature=0
+)
+
+4.Define conversational state
+from langgraph.graph import MessagesState
+
+MessagesState provides a messages field with an appropriate reducer for adding and updating messages.
+This avoids manually concatenating the conversation history.
+
+5.Create the chatbot node
+from langchain_core.messages import SystemMessage
+
+def chatbot(state: MessagesState):
+
+    messages = [
+        SystemMessage(
+            content=(
+                "You are a helpful banking assistant. "
+                "Answer clearly and use the conversation "
+                "history to understand follow-up questions. "
+                "Do not invent banking policy facts."
+            )
+        ),
+        *state["messages"]
+    ]
+
+    response = llm.invoke(messages)
+
+    return {
+        "messages": [response]
+    }
+#FLOW:
+
+    Existing Messages
+       |
+       v
+Add System Instruction
+       |
+       v
+Call Groq LLM
+       |
+       v
+Receive AIMessage
+       |
+       v
+Append AIMessage to State
+
+The *state["messages"] syntax unpacks the message list.
+Returning [response] allows LangGraph's message reducer to merge the response into the stored conversation.
+
+6.ADD In Memory Saver
+from langgraph.checkpoint.memory import InMemorySaver
+
+checkpointer = InMemorySaver()
+
+InMemorySaver is useful for learning, prototyping and tests.
+It stores checkpoints in process memory, so the saved state disappears when the process or Colab runtime ends.
+For persistent applications, use a durable checkpointer backed by a database.
+
+7.Build the graph
+
+from langgraph.graph import StateGraph, START, END
+
+workflow = StateGraph(MessagesState)
+
+workflow.add_node("chatbot", chatbot)
+
+workflow.add_edge(START, "chatbot")
+
+workflow.add_edge("chatbot", END)
+
+app = workflow.compile(
+    checkpointer=checkpointer
+)
+
+app = workflow.compile(checkpointer=checkpointer)
+The checkpointer enables LangGraph to save and restore state for a thread.
+
+PART B - Understand thread_id
+8.First conversation
+
+from langchain_core.messages import HumanMessage
+
+config = {
+    "configurable": {
+        "thread_id": "banking-user-001"
+    }
+}
+
+response1 = app.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content="I want to understand home loans."
+            )
+        ]
+    },
+    config=config
+)
+
+print(response1["messages"][-1].content)
+
+The thread ID identifies a conversation's saved state.
+
+9.Follow-up conversation
+response2 = app.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content="What documents are usually required?"
+            )
+        ]
+    },
+    config=config
+)
+
+print(response2["messages"][-1].content)
+
+Because the thread ID is unchanged, LangGraph loads the previously saved conversation state.
+The model can interpret the follow-up in the context of home loans.
+-------
+Thread ID: banking-user-001
+
+Message 1:
+"I want to understand home loans."
+             |
+             v
+      Save Checkpoint
+             |
+             v
+Message 2:
+"What documents are usually required?"
+             |
+             v
+      Load Previous Messages
+             |
+             v
+       Groq LLM Receives
+       Full Available History
+             |
+             v
+        Contextual Answer
+
+The model can still make mistakes or lose context when histories become too long. Checkpointing preserves state; it does not guarantee perfect recall.
+
+PART C - SEPARATE CONVERSATIONS
+
+10.Create a different thread
+config2 = {
+    "configurable": {
+        "thread_id": "banking-user-002"
+    }
+}
+
+response3 = app.invoke(
+    {
+        "messages": [
+            HumanMessage(
+                content="Explain vehicle loans."
+            )
+        ]
+    },
+    config=config2
+)
+
+print(response3["messages"][-1].content)
+
+This is a separate conversation.
+
+                 CHECKPOINTER
+                      |
+           +----------+----------+
+           |                     |
+           v                     v
+      Thread 001             Thread 002
+           |                     |
+           v                     v
+      Home Loan              Vehicle Loan
+      Conversation           Conversation
+
+Production security: A thread_id is not an authorization mechanism. Your backend must verify that the authenticated user is permitted to access the requested thread.
+
+PART D: INSPECT SAVED STATE1
+11. Retrieve the latest checkpoint
+
+snapshot = app.get_state(config)
+
+print(snapshot.values)
+get_state() returns a state snapshot associated with the supplied thread configuration.
+Inspect the messages:
+
+for message in snapshot.values["messages"]:
+    print(message.type, ":", message.content)
+
+ #you can also inspect checkpoint history:
+for message in snapshot.values["messages"]:
+print(message.type, ":", message.content)
+
+This is useful for debugging how state changed over time.
+Checkpoint history is also foundational for more advanced features such as replay and time travel.
+
+*****************PART E:Human-in-the-loop approval**************************************
+Suppose an AI assistant drafts a customer-facing message, but a human must approve it before it can be released.
+The correct architecture is:
+
+                  USER REQUEST
+                       |
+                       v
+                  DRAFT MESSAGE
+                       |
+                       v
+                 HUMAN APPROVAL
+                       |
+                +------+------+
+                |             |
+              APPROVE        REJECT
+                |             |
+                v             v
+           MARK APPROVED   MARK REJECTED
+                |             |
+                +------+------+
+                       |
+                       v
+                      END
+
+Human approval is especially important before actions that are financially consequential, irreversible or involve external communication.
+
+12.Create an approval state
+
+from typing import TypedDict
+
+class ApprovalState(TypedDict):
+    request: str
+    draft: str
+
+13.Create a drafting node
+
+def draft_message(state: ApprovalState):
+
+    draft = (
+        "Your banking request has been received "
+        "and will be reviewed by our team."
+    )
+
+    return {
+        "draft": draft,
+        "status": "pending"
+    }
+For this example, we use a fixed draft so the approval mechanism can be tested without relying on model output.
+
+14.Create the human-approval node
+
+from langgraph.types import interrupt
+
+def human_approval(state: ApprovalState):
+
+    decision = interrupt({
+        "question": "Approve this draft?",
+        "draft": state["draft"]
+    })
+
+    approved = decision.get("approved", False)
+
+    return {
+        "status": "approved" if approved else "rejected"
+    }
+
+#What does interrupt() do?
+It pauses graph execution and exposes an approval request.
+The application can then collect a human decision and resume execution.
+This is different from simply calling Python's input() inside a node. 
+LangGraph interrupts are designed to work with its persistence and resumption mechanisms.
+Important: When a node resumes after an interrupt, code before the interrupt can execute again. Avoid irreversible side effects before an interrupt unless you have designed for idempotency.
+    
+
+15.Build the approval graph
+
+approval_workflow = StateGraph(ApprovalState)
+
+approval_workflow.add_node("draft", draft_message)
+approval_workflow.add_node("approval", human_approval)
+
+approval_workflow.add_edge(START, "draft")
+approval_workflow.add_edge("draft", "approval")
+approval_workflow.add_edge("approval", END)
+
+approval_app = approval_workflow.compile(
+    checkpointer=InMemorySaver()
+)
+
+16.Start the workflow
+approval_config = {
+    "configurable": {
+        "thread_id": "approval-001"
+    }
+}
+
+result = approval_app.invoke(
+    {
+        "request": "Draft an acknowledgement message.",
+        "draft": "",
+        "status": ""
+    },
+    config=approval_config
+)
+
+print(result)
+
+Execution pauses at the interrupt. Depending on the LangGraph version, the returned result exposes interrupt information, commonly under __interrupt__.
+
+17.Resume after approval
+
+from langgraph.types import Command
+
+result = approval_app.invoke(
+    Command(
+        resume={"approved": True}
+    ),
+    config=approval_config
+)
+
+print(result)
+
+#Expected final state:
+{
+    "request": "Draft an acknowledgement message.",
+    "draft": (
+        "Your banking request has been received "
+        "and will be reviewed by our team."
+    ),
+    "status": "approved"
+}
+#To test rejection, start a new thread and resume it with:
+
+Command(resume={"approved": False})
+
+This workflow records the approval decision; it does not actually send a message.
+
+Part F — Short-term vs long-term memory
+
+These are related but different concepts.
+
+Feature            	Short-term memory	                        Long-term memory
+Main purpose	      Maintain a conversation's state         	Retain information across sessions or threads
+Typical mechanism	  Checkpointer	                            Persistent store
+Scope	              Thread-specific	                          Potentially user- or application-specific
+Example	            Previous question about home loans	      A saved, authorized user preference
+
+LangGraph provides store abstractions for longer-lived information.
+For example, an application may store approved user preferences separately from conversation checkpoints.
+
+Long-term memory needs explicit design for access permissions, data retention, deletion and privacy. Do not automatically store sensitive financial details simply because an LLM mentions them.
+
+PART G- PRODUCTION PERSISTENCE
+from langgraph.checkpoint.memory import InMemorySaver
+
+For production, a database-backed checkpointer is generally more appropriate.
+A PostgreSQL-backed setup can use the separate LangGraph Postgres checkpoint package, with APIs and setup requirements that should be checked against the installed version.
+
+                   FRONTEND
+                       |
+                       v
+                   FASTAPI
+                       |
+                       v
+                 LANGGRAPH APP
+                       |
+          +------------+------------+
+          |                         |
+          v                         v
+      POSTGRESQL                VECTOR STORE
+      Checkpoints                Pinecone
+          |                         |
+          v                         v
+      Thread State              RAG Evidence
+          |                         |
+          +------------+------------+
+                       |
+                       v
+                     GROQ
+                       |
+                       v
+                   RESPONSE
+
+  PostgreSQL and Pinecone serve different purposes here.
+PostgreSQL persists graph execution state.
+Pinecone stores and retrieves vector embeddings.
+One does not replace the other.
+
+
