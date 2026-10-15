@@ -1,6 +1,6 @@
 What is LangGraph?
 LangGraph is a framework for building stateful, long-running AI workflows and agents.
-
+ 
 You already know LangChain:
 chain = prompt | llm
 response = chain.invoke(inputs)
