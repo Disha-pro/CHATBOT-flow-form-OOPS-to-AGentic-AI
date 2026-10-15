@@ -595,5 +595,460 @@ Security: Treat document contents and user messages as untrusted inputs. A routi
 
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-******************************************* LOOPS AND QUERY REWRITING ********************************************************************************************************
+******************************************* LOOPS AND QUERY REWRITING & Retry LIMITS ********************************************************************************************************
+
+ Your graph selected different paths depending on the question. Now we'll build a graph that can detect weak retrieval results, rewrite the question and retry retrieval automatically.
+This is one of the core patterns behind Corrective RAG (CRAG) and Agentic RAG systems.
+
+ 1.WHy do we need loops in RAG?
+#Consider a user asking:
+"What is the minimum credit score required to get a car loan?"
+
+But your document says:
+Vehicle loan applicants require a minimum credit score of 680.
+
+A retriever might fail to find the relevant document if the question and document use different terminology.
+
    
+   Original question:
+"What is the minimum credit score to get a car loan?"
+
+              |
+              v
+      RETRIEVE DOCUMENTS
+              |
+              v
+      EVALUATE RETRIEVAL
+              |
+        +-----+------+
+        |            |
+      GOOD          WEAK
+        |            |
+        v            v
+     GENERATE    REWRITE QUERY
+      ANSWER         |
+        |            v
+        |      "Vehicle loan
+        |       minimum credit
+        |       score"
+        |            |
+        |            v
+        |       RETRIEVE AGAIN
+        |            |
+        +-----<------+
+              |
+              v
+             END
+  The system should retry only a limited number of times. Otherwise, it could enter an infinite loop and waste tokens or API calls.
+
+ -------------PART A - Build the workflow without an LLM
+  We first implement the logic with deterministic Python functions. This is easier to debug than introducing Groq immediately.
+
+  2.Define the STate
+from typing import TypedDict
+class RAGState(TypedDict):
+    question: str  #Original user question; remains unchanged
+    rewritten_question: str #Current query used for retrieval
+    documents: list[str]        #Retrieved evidence
+    retrieval_quality: str        #"good" or "weak"
+    retry_count: int          #Number of rewrite attempts
+    answer: str              #Final answer
+
+**Important engineering practice: Keep the original user question separate from the rewritten query.
+The rewritten query is used for retrieval, but the final answer must still address the original user request.
+
+3.Create a sample knowledge Base
+"knowledge_base = {
+    "vehicle loan": (
+        "Vehicle loan applicants require "
+        "a minimum credit score of 680."
+    ),
+    "home loan": (
+        "Home loan applicants require "
+        "a minimum credit score of 720."
+    ),
+    "personal loan": (
+        "Personal loan applicants require "
+        "a minimum credit score of 700."
+    )
+}
+"
+4.BUild teh retrieval node
+def retrieve_documents(state: RAGState):
+
+    query = state["rewritten_question"].lower()
+
+    retrieved = []
+
+    for keyword, document in knowledge_base.items():
+
+        if keyword in query:
+            retrieved.append(document)
+
+    print("Retrieval query:", query)
+    print("Retrieved documents:", retrieved)
+
+    return {
+        "documents": retrieved
+    }
+
+#Line-by-line explanation
+query = state["rewritten_question"].lower() reads the current search query and normalizes it to lowercase.
+retrieved = [] creates a list to store matching documents.
+knowledge_base.items() iterates over each keyword-document pair.
+if keyword in query: checks whether the query contains the product name.
+retrieved.append(document) adds a matching document.
+The node returns a partial state update containing only documents.
+This is a simplified retriever. Later, your Pinecone vector search will replace the keyword lookup.
+
+ 5.Build the retrieval grading node
+def grade_documents(state: RAGState):
+
+    documents = state["documents"]
+
+    if len(documents) > 0:
+        quality = "good"
+    else:
+        quality = "weak"
+
+    print("Retrieval quality:", quality)
+
+    return {
+        "retrieval_quality": quality
+    }
+ 
+ For this exercise:
+- At least one retrieved document means "good".
+- No documents means "weak".
+In production, document presence does not guarantee relevance. We'll replace this with an LLM-based relevance grader or a calibrated retrieval-quality check.
+
+6.Build the query-rewriting code
+def rewrite_query(state: RAGState):
+
+    query = state["rewritten_question"].lower()
+
+    if "car loan" in query:
+        new_query = query.replace(
+            "car loan",
+            "vehicle loan"
+        )
+    else:
+        new_query = query
+
+    new_retry_count = state["retry_count"] + 1
+
+    print("Rewritten query:", new_query)
+    print("Retry count:", new_retry_count)
+
+    return {
+        "rewritten_question": new_query,
+        "retry_count": new_retry_count
+    }
+
+Why increment retry_count here?
+Every time the system attempts a rewrite, we increment the counter.
+This lets the routing function decide when to stop.
+A retry counter must be stored in graph state so it persists across iterations within the workflow.
+
+7.Create the answer-generation node
+
+def generate_answer(state: RAGState):
+
+    documents = state["documents"]
+
+    if not documents:
+        answer = "I could not find supporting policy information."
+    else:
+        answer = "\n".join(documents)
+
+    return {
+        "answer": answer
+    }
+ This node currently returns the evidence directly. We will replace it with a Groq-powered answer generator later in the lesson.
+
+8.CREATE A SAFE FALLBACK NODE
+def fallback_answer(state: RAGState):
+
+    return {
+        "answer": (
+            "I could not find enough reliable information "
+            "after retrying retrieval."
+        )
+    }
+
+This is essential - A production AI system should not invent an answer simply because retrieval failed.
+-------------------------------------------------------------------------------
+-------PART B- CONDITIONAL ROUTING WITH LOOPS
+
+9. CREATE THE DECISION FUNTION
+MAX_RETRIES = 2
+
+def decide_next_step(state: RAGState):
+
+    if state["retrieval_quality"] == "good":
+        return "generate"
+
+    if state["retry_count"] >= MAX_RETRIES:
+        return "fallback"
+
+    return "rewrite"
+
+The order of these conditions matters.
+First, check whether retrieval succeeded.
+If it succeeded, generate an answer even if a previous rewrite was necessary.
+Otherwise, check whether the retry limit has been reached.If not rewite and retry
+
+
+#Decision Architecture
+                  GRADE DOCUMENTS
+                       |
+                       v
+                Quality == good?
+                       |
+              +--------+--------+
+              |                 |
+             YES                NO
+              |                 |
+              v                 v
+           GENERATE        Retry limit?
+              |                 |
+              |           +-----+-----+
+              |           |           |
+              |          YES          NO
+              |           |           |
+              |           v           v
+              |        FALLBACK    REWRITE
+              |           |           |
+              |           |           v
+              |           |        RETRIEVE
+              |           |           |
+              |           |           v
+              |           |         GRADE
+              |           |           |
+              v           v           |
+             END         END <--------+
+
+---------------------------------------------------------------------
+------------PART C- BUILD THE COMPLETE LANGGRAPH
+
+ 10. Connect all nodes
+ from langgraph.graph import StateGraph, START, END
+
+workflow = StateGraph(RAGState)
+
+# Register nodes
+workflow.add_node("retrieve", retrieve_documents)
+workflow.add_node("grade", grade_documents)
+workflow.add_node("rewrite", rewrite_query)
+workflow.add_node("generate", generate_answer)
+workflow.add_node("fallback", fallback_answer)
+
+# Start with retrieval
+workflow.add_edge(START, "retrieve")
+
+# Grade retrieved evidence
+workflow.add_edge("retrieve", "grade")
+
+# Decide next action
+workflow.add_conditional_edges(
+    "grade",
+    decide_next_step,
+    {
+        "generate": "generate",
+        "rewrite": "rewrite",
+        "fallback": "fallback"
+    }
+)
+
+# Loop back to retrieval
+workflow.add_edge("rewrite", "retrieve")
+
+# Finish after generating or falling back
+workflow.add_edge("generate", END)
+workflow.add_edge("fallback", END)
+
+app = workflow.compile()
+
+********MOST IMP LINE**********************
+workflow.add_edge("rewrite", "retrieve")
+
+TThis creates the loop.
+Unlike a normal linear chain, the graph can return to a previously executed node.
+LangGraph handles the control flow, while your state and routing logic determine when the loop stops.
+----------------------------------------------------------
+----------PART D- EXECUTE AND DEBUG THE WORKFLOW
+
+11.TEST SUCCESSFUL QUERY REWRITING
+
+initial_state = {
+    "question": (
+        "What is the minimum credit score for a car loan?"
+    ),
+    "rewritten_question": (
+        "What is the minimum credit score for a car loan?"
+    ),
+    "documents": [],
+    "retrieval_quality": "",
+    "retry_count": 0,
+    "answer": ""
+}
+
+result = app.invoke(initial_state)
+
+print("\nFINAL RESULT")
+print(result)
+
+#EXpected execution
+Retrieval query: what is the minimum credit score for a car loan?
+Retrieved documents: []
+Retrieval quality: weak
+
+Rewritten query: what is the minimum credit score for a vehicle loan?
+Retry count: 1
+
+Retrieval query: what is the minimum credit score for a vehicle loan?
+Retrieved documents: ['Vehicle loan applicants require a minimum credit score of 680.']
+Retrieval quality: good
+
+--This demostrates a successful retrieval correction
+
+12.Test Retry Exhaustion
+
+initial_state = {
+    "question": "What is the weather on Mars?",
+    "rewritten_question": "What is the weather on Mars?",
+    "documents": [],
+    "retrieval_quality": "",
+    "retry_count": 0,
+    "answer": ""
+}
+
+result = app.invoke(initial_state)
+
+print(result["answer"])
+print("Retries:", result["retry_count"])
+
+Expected:
+I could not find enough reliable information after retrying retrieval.
+Retries: 2
+
+The rewrite function cannot improve this query, so the graph eventually reaches the fallback node.
+In a real system, you should also detect unchanged or repeated rewritten queries and stop early instead of wasting retry attempts.
+
+-------------------------------------------------------------
+-------PART E- UPGRADE QUERY REWRITING WITH GROQ
+Once the deterministic graph works, replace the simple rewriting function with an LLM-powered version.
+from langchain_groq import ChatGroq
+
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    temperature=0
+)
+
+def rewrite_query(state: RAGState):
+
+    original_question = state["question"]
+    current_query = state["rewritten_question"]
+
+    prompt = f"""
+    You are a search-query rewriting assistant.
+
+    Rewrite the current query to improve retrieval
+    from a banking-policy knowledge base.
+
+    Preserve the user's original meaning.
+    Do not invent policy facts.
+    Return only the rewritten search query.
+
+    Original question:
+    {original_question}
+
+    Current search query:
+    {current_query}
+    """
+
+    response = llm.invoke(prompt)
+
+    new_query = response.content.strip()
+
+    return {
+        "rewritten_question": new_query,
+        "retry_count": state["retry_count"] + 1
+    }
+
+Rebuild and recompile the graph using this updated function before testing.
+Why this is better
+The LLM can recognize semantic equivalence between phrases such as:
+- Car loan → Vehicle loan
+- Housing loan → Home loan
+- Eligibility score → Minimum credit score
+However, LLM rewriting is not guaranteed to improve retrieval. It can change the user's meaning, produce repetitive queries or introduce unsupported assumptions.
+That's why production systems evaluate rewritten queries and enforce retry limits.
+-------------------------------------
+
+PART F: REPLACE THE ANSWER NODE WITH GROQ
+
+def generate_answer(state: RAGState):
+
+    context = "\n\n".join(state["documents"])
+
+    prompt = f"""
+    You are a banking-policy assistant.
+
+    Answer the user's question using only
+    the provided context.
+
+    If the context does not contain the answer,
+    say that the information is unavailable.
+
+    Original question:
+    {state["question"]}
+
+    Retrieved context:
+    {context}
+    """
+
+    response = llm.invoke(prompt)
+
+    return {
+        "answer": response.content
+    }
+
+The final answer uses the original question, not just the rewritten query.
+This is important because query rewriting is a retrieval optimization, not permission to change the user's actual request.
+
+13. Production engineering considerations
+
+Problem	                                                    Production solution
+Infinite retrieval loop	                                    Retry limits and recursion limits
+Repeated identical queries                                  Track query history and stop when unchanged
+Irrelevant retrieved documents	                              Relevance grading
+Unsupported generated claims                                	Faithfulness or grounding checks
+API failure                                                   Exception handling and retry/backoff policies
+High latency                                                 	Limit LLM calls and record per-node timings
+Sensitive banking data	                                       Access control, redaction and safe logging
+
+LangGraph's execution recursion limit is a separate safeguard from your business-level retry counter. It prevents excessive graph steps, but it should not replace explicit retry logic.
+
+Question
+   |
+   v
+Retrieve
+   |
+   v
+Weak Evidence
+   |
+   v
+Rewrite
+   |
+   v
+Already Attempted?
+   |
+   +-- YES --> Fallback
+   |
+   +-- NO ---> Retrieve Again
+
+ ------------------------------------------------------------------------------------------------------------------------------------------------
+ --------------------------------------------------------------------------------------------------------------------------------------------
+  ****************************LangGraph Tool Calling & Agent Decision-Making*********************************************
+
